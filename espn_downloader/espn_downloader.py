@@ -6,6 +6,7 @@
 #  The full license is in the file LICENSE, distributed with this software.
 
 import argparse
+import sys
 from datetime import datetime, timedelta
 from lxml import etree
 import os.path
@@ -16,8 +17,11 @@ import subprocess
 import re
 from iz_dvd.user_input import prompt_user_list
 
+DATA_DIR = os.path.expanduser('~/.config/iz_espn')
+#~ EVENTS_CACHE_FILE = os.path.join(DATA_DIR, )
 USER_INFO_FILE = os.path.expanduser('~/.config/iz_espn/userdata.xml')
 ESPN_CONFIG_URL = 'http://espn.go.com/watchespn/player/config'
+FEEDS_URL_BASE = 'http://espn.go.com/watchespn/feeds/startup?action=replay'
 AUTH_URL_BASE = ('https://espn-ws.bamnetworks.com/'
                  'pubajaxws/bamrest/MediaService2_0/'
                  'op-findUserVerifiedEvent/v-2.1')
@@ -45,37 +49,168 @@ OPTIONS = get_options()
 
 #-----------------------------------------------------------------------------
 
-def get_replay_url(days=3, channels=['espn3']):
+def get_feeds_url(start, end, channels=['espn3']):
     channels = ','.join(channels)
-    curdate = datetime.utcnow()
-    enddate = curdate.strftime("%Y%m%d")
-    startdate = (curdate-timedelta(days)).strftime("%Y%m%d")
-    events_url_base = 'http://espn.go.com/watchespn/feeds/startup?action=replay'
-    events_url = '{}&channel={}&endDate={}&startDate={}'.format(events_url_base,
+    start_date = start.strftime('%Y%m%d')
+    end_date = end.strftime('%Y%m%d')
+    #~ curdate = datetime.utcnow()
+    #~ enddate = curdate.strftime("%Y%m%d")
+    #~ startdate = (curdate-timedelta(days)).strftime("%Y%m%d")
+    feeds_url = '{}&channel={}&endDate={}&startDate={}'.format(FEEDS_URL_BASE,
                                                                 channels,
-                                                                enddate,
-                                                                startdate)
-    return events_url
+                                                                end_date,
+                                                                start_date)
+    print('{1}\nFeeds URL: {0}\n{1}\n'.format(feeds_url, '='*78))
+    # temporary
+    #~ return 'file:///home/will/bin/git/iz_espn/iz_espn/.gitignore/events.60d.pp.xml'
+    return feeds_url
 
-def get_events(url, sport=None):
-    print(OPTIONS)
-    xml = etree.parse(url)
-    root = xml.getroot()
-    if sport:
-        events = root.xpath('event[sport[text() = $sport]]', sport=sport)
-    else:
-        events = list(root)
+def get_events(days=7, channels=['espn3']):
+    events = []
+    now = datetime.now()
+    start = now-timedelta(days)
+    for c in channels:
+        channel_events = []
+        cached_url = os.path.join(DATA_DIR, '{}.xml'.format(c))
+        new_url = None
+        if os.path.exists(cached_url):
+            cached_xml = etree.parse(cached_url)
+            cached_feed = cached_xml.getroot()
+            channel_events.extend(parse_feed(cached_feed))
+            cache_updated = cached_feed.get('updated')
+            if cache_updated:
+                cache_updated = datetime.fromtimestamp(float(cache_updated))
+            else:
+                cache_updated = channel_events[0]['start_time']
+            # test if oldest cached event is less than <days> ago
+            if channel_events[-1]['start_time'] > start:
+                #~ cache_updated = now
+                new_url = get_feeds_url(start, now, [c])
+            # test if cache has been updated within last 30 minutes
+            elif cache_updated < now - timedelta(minutes=30):
+                new_url = get_feeds_url(cache_updated, now, [c])
+            #~ elif channel_events[0]['start_time'] < now - timedelta(minutes=30):
+                #~ new_url = get_feeds_url(channel_events[0]['start_time'], now, [c])
+        else:
+            #~ cache_updated = now
+            new_url = get_feeds_url(start, now, [c])
+        if new_url:
+            print('Fetching new events from server...')
+            new_events = parse_feed(new_url)
+            new_events = [n for n in parse_feed(new_url) if n['eventid']
+                          not in [i['eventid'] for i in channel_events]]
+            channel_events = new_events + channel_events
+            update_cache(cached_url, channel_events, now)
+            #~ channel_events.extend(new_events)
+        events.extend(channel_events)
+    events = sorted(events, key=lambda e: e['start_time'], reverse=True)
+    events = filter_events(events)
     return events
 
+def update_cache(path, events, updated, days=90):
+    updated = str(updated.timestamp())
+    old = datetime.utcnow() - timedelta(days=days)
+    keep_events = [i['xml'] for i in events if i['start_time'] > old]
+
+    root = etree.Element('events', updated=updated)
+    root.extend(keep_events)
+    #~ for i in keep_events:
+        #~ root.append(i)
+    tree = etree.ElementTree(root)
+    tree.write(path, encoding='UTF-8', pretty_print=True)
+    
+    #~ xml = etree.parse(path)
+    #~ root = xml.getroot()
+    #~ cached_ids = [i.get('id') for i in root]
+    #~ for i in reversed(new_events):
+        #~ if i['eventid'] not in cached_ids:
+            #~ root.insert(0, i['xml'])
+    #~ old = datetime.utcnow() - timedelta(days=days)
+    #~ old_gmt_ms = old.timestamp() * 1000
+    #~ newroot = root
+
+def parse_feed(feed):
+    if type(feed) == etree._Element:
+        root = feed
+    else:
+        xml = etree.parse(feed)
+        root = xml.getroot()
+    events = [get_event_info(i) for i in root]
+    events = sorted(events, key=lambda e: e['start_time'], reverse=True)
+    #~ events = list(root)
+    #~ if sport:
+        #~ events = root.xpath('event[sport[text() = $sport]]', sport=sport)
+    #~ else:
+        #~ events = list(root)
+    return events
+
+def filter_events(events):
+    events = filter_by_time(events)
+    if OPTIONS.list_sports:
+        events = prompt_sports(events)
+    if OPTIONS.search:
+        events = search_events(events, OPTIONS.search)
+    return events
+
+def search_events(events, regex):
+    filtered = []
+    for pat in regex:
+        found = [i for i in events 
+                 if re.search(pat, i['xml'].xpath('string()'), re.I)]
+        filtered.extend(found)
+    return filtered
+
+def filter_by_time(events, days=None):
+    if not days:
+        days = OPTIONS.days
+    now = datetime.now()
+    old = now - timedelta(days=days)
+    filtered = [i for i in events if i['start_time'] >= old ]
+    return filtered
+
+def filter_by_sport(events, sports):
+    if type(sports) is not list:
+        sports = [sports]
+    filtered = []
+    for s in sports:
+        found = [i for i in events if i['sport'].lower() == s.lower()]
+        filtered.extend(found)
+    return filtered
+
+def prompt_user(choices):
+    if not choices:
+        print('No events to display with current options. Exiting...')
+        sys.exit()
+    response = prompt_user_list(choices)
+    if response is False:
+        print('Exiting...')
+        sys.exit()
+    else:
+        return response
+
 def prompt_events(events):
-    event_infos = [get_event_info(i) for i in events]
+    #~ event_infos = [get_event_info(i) for i in events]
+    if not events:
+        print('No events to display with current options. Exiting...')
+        sys.exit()
     choices = ['{} {:^12} {:6} {}'.format(i['channel'],
                                           i['sport'],
                                           '{:%-m/%-d}'.format(i['start_time']),
-                                          i['name']) for i in event_infos]
+                                          i['name']) for i in events]
     response = prompt_user_list(choices)
+    if response is False:
+        print('Exiting...')
+        sys.exit()
     chosen = events[response]
     return chosen
+
+def prompt_sports(events):
+    sports = sorted(list(set([i['sport'] for i in events])))
+    response = prompt_user(sports)
+    chosen = sports[response]
+    filtered = filter_by_sport(events, chosen)
+    return filtered
+    
 
 def get_user_info():
     xml = etree.parse(USER_INFO_FILE)
@@ -94,6 +229,7 @@ def get_network_info(channel='espn3'):
     channel = network.get('name')
     network_info = {'playerId': playerId, 'cdnName': cdnName, 
                     'channel': channel}
+    print('{1}\nNetwork Info: {0}\n{1}\n'.format(network_info, '='*78), sep='\n')
     return network_info
 
 def get_event_info(event, file_ext='mp4'):
@@ -109,8 +245,11 @@ def get_event_info(event, file_ext='mp4'):
                                                 start_time.strftime('%Y.%m.%d'),
                                                 file_ext))
     event = {'eventid': eventid, 'bamContentId': bamContentId, 
-             'bamEventId':bamEventId, 'name': name, 'sport': sport,
-             'filename': filename, 'start_time': start_time, 'channel': channel}
+             'bamEventId':bamEventId, 
+             'name': name, 'sport': sport, 'start_time': start_time, 
+             'channel': channel,
+             'filename': filename, 'xml': event}
+    #~ print('{1}\nEvent Info: {0}\n{1}\n'.format(event, '='*78), sep='\n')
     return event
 
 def sanitize_filename(name, space_char='.'):
@@ -140,6 +279,7 @@ def get_auth_url(event):
     auth_params['playerId'] = network_info['playerId']
     auth_params_str = '&'.join(['='.join([k,v]) for k,v in auth_params.items()])
     auth_url = '{}?{}'.format(AUTH_URL_BASE, auth_params_str)
+    print('{1}\nAuth URL: {0}\n{1}\n'.format(auth_url, '='*78), sep='\n')
     return auth_url
 
 def get_smil_url(auth_url):
@@ -149,6 +289,7 @@ def get_smil_url(auth_url):
                     '{*}user-verified-content/'
                     '{*}user-verified-media-item/'
                     '{*}url').text
+    print('{1}\nSMIL URL: {0}\n{1}\n'.format(smil_url, '='*78), sep='\n')
     return smil_url
 
 def get_rtmp_info(smil_url, quality=None):
@@ -180,13 +321,15 @@ def get_rtmp_info(smil_url, quality=None):
     rtmp_url_base = root.find('head/meta').get('base')
     rtmp_url = '{}/?{}'.format(rtmp_url_base, rtmp_auth)
     rtmp_info = {'rtmp_url': rtmp_url, 'playpath': playpath}
+    print('{1}\nRTMP Info: {0}\n{1}\n'.format(rtmp_info, '='*78), sep='\n')
     return rtmp_info
 
 def download_stream(rtmp_info, path):
     args = ['rtmpdump', '-r', rtmp_info['rtmp_url'],
             '-y', rtmp_info['playpath'], '-m', '360',
             '-e', '-o', path]
-    print('rtmp cmd: {}'.format(' '.join(args)))
+    print('{1}\nRTMP cmd: {0}\n{1}\n'.format(' '.join(args), '='*78), sep='\n')
+    #~ print('RTMP cmd: {}'.format(' '.join(args)))
     ret_code = 1
     while ret_code != 0:
         ret_code = subprocess.call(args)
@@ -202,8 +345,9 @@ def get_event(event, quality=None):
     return downloaded
 
 def main():
-    events = get_events(get_replay_url(OPTIONS.days))
+    events = get_events(OPTIONS.days)
     chosen = prompt_events(events)
+    print('{1}\nEvent Info: {0}\n{1}\n'.format(chosen, '='*78), sep='\n')
     downloaded = get_event(chosen, quality=OPTIONS.bitrate)
     
     return 0
