@@ -4,6 +4,9 @@
 #  Copyright (c) 2013 Will Adams
 #  Distributed under the terms of the Modified BSD License.
 #  The full license is in the file LICENSE, distributed with this software.
+#
+#  I Would have never figured out how to make this work without 
+#  the espn3 xbmc addon by Ksosez/BlueCop. Thanks for that.   
 
 import argparse
 import sys
@@ -17,7 +20,7 @@ import random
 import urllib.request
 import subprocess
 import re
-from iz_dvd.user_input import prompt_user_list
+import numbers 
 
 # User config ----------------------------------------------------------------
 #~ DOWNLOAD_DIR = os.path.expanduser('~/Videos/espn')
@@ -25,6 +28,7 @@ from iz_dvd.user_input import prompt_user_list
 #~ FORCE_REFRESH_MINUTES = 60
 #~ USER_INFO_FILE = os.path.expanduser('~/.config/iz_espn/userdata.xml')
 # ESPN config ----------------------------------------------------------------
+ESPN_USERDATA_URL = 'http://broadband.espn.go.com/espn3/auth/userData?format=xml'
 ESPN_CONFIG_URL = 'http://espn.go.com/watchespn/player/config'
 FEEDS_URL_BASE = 'http://espn.go.com/watchespn/feeds/startup?action=replay'
 LIVE_URL_BASE = 'http://espn.go.com/watchespn/feeds/startup?action=live'
@@ -52,8 +56,7 @@ def get_options():
     parser.add_argument('-s', '--search', action='append')
     parser.add_argument('--search-sports', action='append')
     parser.add_argument('--download-dir', default=None, help='Default: current directory')
-    parser.add_argument('--cache-dir', default='~/.config/iz_espn', help='Directory for retrieving userdata.xml and storing events cache.')
-    parser.add_argument('--userdata-xml', default=None, help='Default: <cache-dir>/userdata.xml')
+    parser.add_argument('--cache-dir', default='~/.config/iz_espn', help='Directory for storing/reading events cache.')
     parser.add_argument('-r', '--force-refresh-minutes', type=int, default=60)
     options = parser.parse_args()
     if options.download_dir is None:
@@ -63,19 +66,13 @@ def get_options():
         options.download_dir = os.path.expanduser(options.download_dir)
     options.cache_dir = os.path.expandvars(options.cache_dir)
     options.cache_dir = os.path.expanduser(options.cache_dir)
-    if options.userdata_xml is None:
-        options.userdata_xml = os.path.join(options.cache_dir, 'userdata.xml')
-    else:
-        options.userdata_xml = os.path.expandvars(options.userdata_xml)
-        options.userdata_xml = os.path.expanduser(options.userdata_xml)
-
     return options
 
 OPTIONS = get_options()
 
 #-----------------------------------------------------------------------------
 
-def get_feeds_url(start, end=None, channels=['espn3']):
+def get_feeds_url(start, channels=['espn3'], end=None):
     channels = ','.join(channels)
     start_date = start.strftime('%Y%m%d')
     #~ end_date = end.strftime('%Y%m%d')
@@ -96,6 +93,18 @@ def get_live_url(channels=['espn3']):
     print('{1}\nLive URL: {0}\n{1}\n'.format(live_url, '='*78))
     return live_url
 
+def get_cached_url(channel):
+    cdir = OPTIONS.cache_dir
+    if not os.path.isdir(cdir):
+        try:
+            os.makedirs(cdir)
+        except:
+            cdir = None
+    if not cdir:
+        cdir = os.getcwd()
+    cached_url = os.path.join(cdir, '{}.xml'.format(channel))
+    return cached_url
+
 def get_events(days=7, force_refresh_minutes=None, channels=['espn3'], 
                mode='replay'):
     if mode == 'live':
@@ -111,7 +120,8 @@ def get_events(days=7, force_refresh_minutes=None, channels=['espn3'],
     start = now-timedelta(days)
     for c in channels:
         channel_events = []
-        cached_url = os.path.join(OPTIONS.cache_dir, '{}.xml'.format(c))
+        #cached_url = os.path.join(OPTIONS.cache_dir, '{}.xml'.format(c))
+        cached_url = get_cached_url(c)
         new_url = None
         if os.path.exists(cached_url):
             cached_xml = etree.parse(cached_url)
@@ -238,7 +248,7 @@ def prompt_sports(events):
     return filtered
 
 def get_user_info():
-    xml = etree.parse(OPTIONS.userdata_xml)
+    xml = etree.parse(ESPN_USERDATA_URL)
     root = xml.getroot()
     affiliate_name = root.find('affiliate/name').text
     swid = root.find('personalization').get('swid')
@@ -407,6 +417,44 @@ def download_stream(rtmp_info, path, mode='replay'):
         tries += 1
         time.sleep(.2)
     return path
+
+def prompt_user_list(choices, prompt=None,
+                     header='User input required', 
+                     default=0, info=None,
+                     include_quit=True, quit_def=('q', 'quit'), 
+                     lines_before=1, 
+                     header_sep='>', choices_sep='-', sep_length=78):
+    print('\n'*lines_before)
+    if header:
+        if header_sep:
+            print(header_sep*sep_length)
+        print('{}:'.format(header))
+        if header_sep:
+            print(header_sep*sep_length)
+    if prompt is None:
+        prompt = 'Select from the choices above [{}]: '.format(default)
+    idx_width = len(str(len(choices)))
+    choices = '\n'.join(['{:{width}}) {}'.format(n, i, width=idx_width) 
+                         for n,i in enumerate(choices)])
+    if include_quit:
+        choices = '\n'.join([choices, '{}) {}'.format(*quit_def)])
+    #~ if choices_sep:
+        #~ print(choices_sep*sep_length)
+    print(choices)
+    if choices_sep:
+        print(choices_sep*sep_length)
+    while True:
+        response = input(prompt).lower()
+        if response == '':
+            return default
+        if response == 'q':
+            return False
+        if response.isdigit():
+            response = int(response)
+        if response in range(len(choices.splitlines())):
+            return int(response)
+        else:
+            print('Invalid choice.')
 
 def get_event(event, quality=None, mode='replay'):
     #~ event_info = get_event_info(event)
