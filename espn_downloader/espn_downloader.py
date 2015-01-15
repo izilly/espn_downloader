@@ -22,11 +22,6 @@ import subprocess
 import re
 import numbers 
 
-# User config ----------------------------------------------------------------
-#~ DOWNLOAD_DIR = os.path.expanduser('~/Videos/espn')
-#~ DATA_DIR = os.path.expanduser('~/.config/iz_espn')
-#~ FORCE_REFRESH_MINUTES = 60
-#~ USER_INFO_FILE = os.path.expanduser('~/.config/iz_espn/userdata.xml')
 # ESPN config ----------------------------------------------------------------
 ESPN_USERDATA_URL = 'http://broadband.espn.go.com/espn3/auth/userData?format=xml'
 ESPN_CONFIG_URL = 'http://espn.go.com/watchespn/player/config'
@@ -335,33 +330,10 @@ def get_rtmp_info(smil_url, quality=None):
                                                              random.random())))
     root = xml.getroot()
     video_streams = root.findall('body/switch/video')
-    #~ video_bitrates = [int(i.get('system-bitrate')) for i in video_streams]
-    #~ if quality == 'prompt':
-        #~ choices = ['{}k'.format(i/1000) for i in video_bitrates]
-        #~ response = prompt_user(choices, header='Available Bitrates')
-        #~ quality = video_bitrates[response]
-    #~ if quality in ['max', None]:
-        #~ quality = max(video_bitrates)
-    #~ elif quality == 'min':
-        #~ quality = min(video_bitrates)
-    #~ else:
-        #~ if type(quality) == int:
-            #~ bitrate = quality
-        #~ else:
-            #~ bitrate = int(quality.strip('k')) * 1000
-        #~ diffs = [i - bitrate for i in video_bitrates]
-        #~ abs_diffs = [abs(i) for i in diffs]
-        #~ closest = min(abs_diffs)
-        #~ if closest in diffs:
-            #~ quality = video_bitrates[diffs.index(closest)]
-        #~ else:
-            #~ quality = video_bitrates[abs_diffs.index(closest)]
-    #~ stream = video_streams[video_bitrates.index(quality)]
     stream = video_streams[quality]
     print(etree.tostring(stream, pretty_print=True).decode())
     playpath = stream.get('src')
     rtmp_url_base = root.find('head/meta').get('base')
-    #~ rtmp_url = '{}/?{}'.format(rtmp_url_base, rtmp_auth)
     rtmp_info = {'rtmp_url': rtmp_url_base, 'playpath': playpath, 
                  'rtmp_auth': rtmp_auth}
     print('{1}\nRTMP Info: {0}\n{1}\n'.format(rtmp_info, '='*78), sep='\n')
