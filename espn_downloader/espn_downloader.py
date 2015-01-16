@@ -40,8 +40,6 @@ NETWORK_IDS = {'n360': 'espn3',
 
 def get_options():
     parser = argparse.ArgumentParser(prog='iz_espn')
-    parser.add_argument('-m', '--mode', default='replay', 
-                        choices=['replay', 'live'])
     parser.add_argument('-d', '--days', default='3', type=int)
     parser.add_argument('-b', '--bitrate', choices=['max', 'min', 'prompt',
                                                     '400k', '800k', '1200k', 
@@ -51,7 +49,7 @@ def get_options():
     parser.add_argument('-s', '--search', action='append')
     parser.add_argument('--search-sports', action='append')
     parser.add_argument('--download-dir', default=None, help='Default: current directory')
-    parser.add_argument('--cache-dir', default='~/.config/iz_espn', help='Directory for storing/reading events cache.')
+    parser.add_argument('--cache-dir', default='~/.local/share/espn_downloader', help='Directory for storing/reading events cache.')
     parser.add_argument('-r', '--force-refresh-minutes', type=int, default=60)
     options = parser.parse_args()
     if options.download_dir is None:
@@ -102,11 +100,6 @@ def get_cached_url(channel):
 
 def get_events(days=7, force_refresh_minutes=None, channels=['espn3'], 
                mode='replay'):
-    if mode == 'live':
-        live_url = get_live_url()
-        events = parse_feed(live_url)
-        return events
-    #
     if force_refresh_minutes is None:
         force_refresh_minutes = OPTIONS.force_refresh_minutes
     events = []
@@ -367,19 +360,12 @@ def select_bitrate(quality):
     
 
 def download_stream(rtmp_info, path, mode='replay'):
-    if mode == 'replay':
-        url = '{}/?{}'.format(rtmp_info['rtmp_url'], rtmp_info['rtmp_auth'])
-        playpath = rtmp_info['playpath']
-    else:
-        url = rtmp_info['rtmp_url']
-        playpath = '{}?{}'.format(rtmp_info['playpath'], rtmp_info['rtmp_auth'])
+    url = '{}/?{}'.format(rtmp_info['rtmp_url'], rtmp_info['rtmp_auth'])
+    playpath = rtmp_info['playpath']
     args = ['rtmpdump', '-r', url,
             '-y', playpath, '-m', '360']
             #~ '-e', '-o', path]
-    if mode == 'replay':
-        args.extend(['-e', '-o', path])
-    else:
-        args.extend(['-v', '-Y', '-o', path])
+    args.extend(['-e', '-o', path])
 
     print('{1}\nRTMP cmd: {0}\n{1}\n'.format(' '.join(args), '='*78), sep='\n')
     ret_code = 1
@@ -439,11 +425,11 @@ def get_event(event, quality=None, mode='replay'):
     return downloaded
 
 def main(mode='replay'):
-    events = get_events(OPTIONS.days, mode=OPTIONS.mode)
+    events = get_events(OPTIONS.days)
     chosen = prompt_events(events)
     print('{1}\nEvent Info: {0}\n{1}\n'.format(chosen, '='*78), sep='\n')
     #~ quality = select_bitrate(OPTIONS.bitrate)
-    downloaded = get_event(chosen, quality=OPTIONS.bitrate, mode=OPTIONS.mode)
+    downloaded = get_event(chosen, quality=OPTIONS.bitrate)
     
     return 0
 
