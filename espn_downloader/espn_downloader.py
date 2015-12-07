@@ -21,15 +21,21 @@ import urllib.request
 import subprocess
 import re
 import numbers 
+import string
 
 # ESPN config ----------------------------------------------------------------
 ESPN_USERDATA_URL = 'http://broadband.espn.go.com/espn3/auth/userData?format=xml'
 ESPN_CONFIG_URL = 'http://espn.go.com/watchespn/player/config'
 FEEDS_URL_BASE = 'http://espn.go.com/watchespn/feeds/startup?action=replay'
 LIVE_URL_BASE = 'http://espn.go.com/watchespn/feeds/startup?action=live'
-AUTH_URL_BASE = ('https://espn-ws.bamnetworks.com/'
-                 'pubajaxws/bamrest/MediaService2_0/'
-                 'op-findUserVerifiedEvent/v-2.1')
+AUTH_URL_BASE_HDS = ('https://espn-ws.bamnetworks.com/'
+                     'pubajaxws/bamrest/MediaService2_0/'
+                     'op-findUserVerifiedEvent/v-2.1')
+AUTH_URL_BASE_HLS = ('http://broadband.espn.go.com/espn3/auth/'
+                     'watchespn/startSession')
+AUTH_URL_BASE = {'HLS': AUTH_URL_BASE_HLS,
+                 'HDS': AUTH_URL_BASE_HDS,
+                 'RTMP': AUTH_URL_BASE_HDS,}
 NETWORK_IDS = {'n360': 'espn3',
                'n501': 'espn1',
                'n502': 'espn2',
@@ -107,42 +113,13 @@ def get_events(days=7, force_refresh_minutes=None, channels=['espn3'],
     end = now + timedelta(days=1)
     start = now-timedelta(days)
     for c in channels:
-        channel_events = []
-        #cached_url = os.path.join(OPTIONS.cache_dir, '{}.xml'.format(c))
-        cached_url = get_cached_url(c)
-        new_url = None
-        if os.path.exists(cached_url):
-            cached_xml = etree.parse(cached_url)
-            cached_feed = cached_xml.getroot()
-            channel_events.extend(parse_feed(cached_feed))
-            cache_updated = cached_feed.get('updated')
-            if cache_updated:
-                cache_updated = datetime.fromtimestamp(float(cache_updated))
-            else:
-                cache_updated = channel_events[0]['start_time']
-            # test if oldest cached event is less than <days> ago
-            if channel_events[-1]['start_time'] > start:
-                #~ cache_updated = now
-                new_url = get_feeds_url(start, [c])
-            # test if cache has been updated within last 30 minutes
-            elif cache_updated < now - timedelta(minutes=force_refresh_minutes):
-                new_url = get_feeds_url(cache_updated, [c])
-        else:
-            new_url = get_feeds_url(start, [c])
-        if new_url:
-            print('Fetching new events from server...')
-            #new_events = parse_feed(new_url)
-            new_events = [n for n in parse_feed(new_url) if n['eventid']
-                          not in [i['eventid'] for i in channel_events]]
-            channel_events = new_events + channel_events
-            update_cache(cached_url, channel_events, now)
-        else:
-            print('Cached events less than {} minutes old. '
-                  'Using cached events only...'.format(force_refresh_minutes))
-        events.extend(channel_events)
+        new_url = get_feeds_url(start, [c])
+        print('Fetching new events from server...')
+        events = parse_feed(new_url)
     events = sorted(events, key=lambda e: e['start_time'], reverse=True)
     events = filter_events(events)
     return events
+
 
 def update_cache(path, events, updated, days=90):
     # TODO: save some number of old cache files?
@@ -213,7 +190,7 @@ def prompt_events(events):
     #~ if not events:
         #~ print('No events to display with current options. Exiting...')
         #~ sys.exit()
-    choices = ['{} {:^12} {:6} {}'.format(i['channel'],
+    choices = ['{} {:^12} {:6} {}'.format(i['networkId'],
                                           i['sport'],
                                           '{:%-m/%-d}'.format(i['start_time']),
                                           i['name']) for i in events]
@@ -241,12 +218,15 @@ def get_user_info():
     affiliate_name = root.find('affiliate/name').text
     swid = root.find('personalization').get('swid')
     identityPointId = ':'.join([affiliate_name, swid])
-    return {'identityPointId': identityPointId}
+    return {'identityPointId': identityPointId,
+            'affiliate_name': affiliate_name,
+            'swid': swid}
 
 def get_network_info(channel='espn3'):
     xml = etree.parse(ESPN_CONFIG_URL)
     root = xml.getroot()
-    network = root.xpath('.//network[@name=$channel]', channel=channel)[0]
+    #network = root.xpath('.//network[@name=$channel]', channel=channel)[0]
+    network = root.xpath('.//network[@id=$channel]', channel=channel)[0]
     playerId = network.get('playerId')
     cdnName = network.get('defaultCdn')
     channel = network.get('name')
@@ -255,25 +235,19 @@ def get_network_info(channel='espn3'):
     print('{1}\nNetwork Info: {0}\n{1}\n'.format(network_info, '='*78), sep='\n')
     return network_info
 
-def get_event_info(event, file_ext='mp4'):
-    eventid = event.get('id')
-    bamContentId = event.get('bamContentId')
-    bamEventId = event.get('bamEventId')
-    name = event.find('name').text
-    sport = event.find('sportDisplayValue').text
-    start_timestamp = int(event.find('startTimeGmtMs').text) / 1000
+def get_event_info(event):
+    event_info = dict(event.attrib)
+    event_items = {item.tag: item.text for item in list(event)}
+    event_info.update(event_items)
+    start_timestamp = int(event_info['startTimeGmtMs']) / 1000
     start_time = datetime.fromtimestamp(start_timestamp)
-    networkId = event.find('networkId').text
-    channel = NETWORK_IDS[networkId]
-    filename = sanitize_filename('{}-{}-{}.{}'.format(sport, name, 
-                                                start_time.strftime('%Y.%m.%d'),
-                                                file_ext))
-    event = {'eventid': eventid, 'bamContentId': bamContentId, 
-             'bamEventId':bamEventId, 
-             'name': name, 'sport': sport, 'start_time': start_time, 
-             'channel': channel, 'networkId': networkId,
-             'filename': filename, 'xml': event}
-    return event
+    filename = sanitize_filename('{}-{}-{}'.format(
+                                            event_info['sportDisplayValue'], 
+                                            event_info['name'], 
+                                            start_time.strftime('%Y.%m.%d'),))
+    event_info['start_time'] = start_time
+    event_info['filename'] = filename
+    return event_info
 
 def sanitize_filename(name, space_char='.'):
     #~ linux_invalid = [r'/']
@@ -285,31 +259,50 @@ def sanitize_filename(name, space_char='.'):
     return filename
 
 def get_auth_url(event):
-    #~ event_info = get_event_info(event)
-    #~ networkId = event.find('networkId').text
-    networkId = event['networkId']
-    #~ channel = NETWORK_IDS[networkId]
-    channel = event['channel']
-    network_info = get_network_info(channel)
+    stream_type = event['desktopStreamSource']
+    network_info = get_network_info(event['networkId'])
     user_info = get_user_info()
+    channel = network_info['channel']
+    pkan = ''.join([random.choice(string.ascii_letters + string.digits) 
+                  for n in range(51)])
+    pkan = '{}%3D'.format(pkan)
     auth_params = OrderedDict()
-    auth_params['playbackScenario'] = 'FMS_CLOUD'
-    auth_params['channel'] = channel
-    auth_params['partnerContentId'] = event['eventid']
-    auth_params['eventId'] = event['bamEventId']
-    auth_params['contentId'] = event['bamContentId']
-    auth_params['rand'] = '{:.16f}'.format(random.random())
-    auth_params['cdnName'] = network_info['cdnName']
-    auth_params['identityPointId'] = user_info['identityPointId']
-    auth_params['playerId'] = network_info['playerId']
-    auth_params_str = '&'.join(['='.join([k,v]) for k,v in auth_params.items()])
-    auth_url = '{}?{}'.format(AUTH_URL_BASE, auth_params_str)
+    if stream_type.lower() == 'hls':
+        auth_params['v'] = '1.5'
+        auth_params['affiliate'] = user_info['affiliate_name']
+        auth_params['cdnName'] = network_info['cdnName']
+        auth_params['channel'] = channel
+        auth_params['playbackScenario'] = 'FMS_CLOUD'
+        auth_params['pkan'] = pkan
+        auth_params['pkanType'] = 'SWID'
+        auth_params['eventid'] = event['id']
+        auth_params['simulcastAiringId'] = event['simulcastAiringId']
+        auth_params['rand'] = str(random.randint(100000,999999))
+        auth_params['playerId'] = network_info['playerId']
+    else:
+        #auth_params['playbackScenario'] = 'FMS_CLOUD'
+        #auth_params['channel'] = channel
+        ##auth_params['partnerContentId'] = event['eventid']
+        #auth_params['partnerContentId'] = event['id']
+        ##auth_params['eventId'] = event['bamEventId']
+        ##auth_params['contentId'] = event['bamContentId']
+        #auth_params['eventId'] = event['eventId']
+        #auth_params['contentId'] = event['bamContentId']
+        #auth_params['rand'] = '{:.16f}'.format(random.random())
+        #auth_params['cdnName'] = network_info['cdnName']
+        #auth_params['identityPointId'] = user_info['identityPointId']
+        #auth_params['playerId'] = network_info['playerId']
+        raise
+    auth_params_str = '&'.join(['='.join([k,v]) for k,v in 
+                                auth_params.items()])
+    auth_url = '{}?{}'.format(AUTH_URL_BASE[stream_type], auth_params_str)
     print('{1}\nAuth URL: {0}\n{1}\n'.format(auth_url, '='*78), sep='\n')
     return auth_url
 
 def get_smil_url(auth_url):
     xml = etree.parse(urllib.request.urlopen(auth_url))
     root = xml.getroot()
+    # todo: find url tag 
     smil_url = root.find('{*}user-verified-event/'
                     '{*}user-verified-content/'
                     '{*}user-verified-media-item/'
@@ -358,14 +351,40 @@ def select_bitrate(quality):
     print('{1}\nBitrate: {0:.0f}k\n{1}\n'.format(video_bitrates[bitrate]/1000, '='*78), sep='\n')
     return bitrate
     
+def download_stream(smil_url, outfile, stream_type):
+    if stream_type.lower() == 'hls':
+        downloaded = download_hls(smil_url, outfile)
+    else:
+        downloaded = download_rtmp(smil_url, outfile)
+    return downloaded
 
-def download_stream(rtmp_info, path, mode='replay'):
-    url = '{}/?{}'.format(rtmp_info['rtmp_url'], rtmp_info['rtmp_auth'])
-    playpath = rtmp_info['playpath']
+def download_hls(url, outfile):
+    cmd = ['ffmpeg',
+            '-i', url,
+            '-c', 'copy',
+            outfile]
+    o = subprocess.check_call(cmd, 
+                              #stderr=subprocess.DEVNULL,
+                              #stdin=subprocess.DEVNULL
+                             )
+    return outfile
+
+def download_rtmp(smil_url, outfile, mode='replay'):
+    quality = select_bitrate(OPTIONS.bitrate)
+    rtmp_info = get_rtmp_info(smil_url, quality=quality)
+    if mode == 'replay':
+        url = '{}/?{}'.format(rtmp_info['rtmp_url'], rtmp_info['rtmp_auth'])
+        playpath = rtmp_info['playpath']
+    else:
+        url = rtmp_info['rtmp_url']
+        playpath = '{}?{}'.format(rtmp_info['playpath'], rtmp_info['rtmp_auth'])
     args = ['rtmpdump', '-r', url,
             '-y', playpath, '-m', '360']
             #~ '-e', '-o', path]
-    args.extend(['-e', '-o', path])
+    if mode == 'replay':
+        args.extend(['-e', '-o', outfile])
+    else:
+        args.extend(['-v', '-Y', '-o', outfile])
 
     print('{1}\nRTMP cmd: {0}\n{1}\n'.format(' '.join(args), '='*78), sep='\n')
     ret_code = 1
@@ -415,13 +434,16 @@ def prompt_user_list(choices, prompt=None,
             print('Invalid choice.')
 
 def get_event(event, quality=None, mode='replay'):
-    #~ event_info = get_event_info(event)
+    stream_type = event['desktopStreamSource']
+    if stream_type.lower() == 'hls':
+        ext = 'ts'
+    else:
+        ext = 'mp4'
     download_path = os.path.join(OPTIONS.download_dir, event['filename'])
+    download_path = '{}.{}'.format(download_path, ext)
     auth_url = get_auth_url(event)
     smil_url = get_smil_url(auth_url)
-    quality = select_bitrate(OPTIONS.bitrate)
-    rtmp_info = get_rtmp_info(smil_url, quality=quality)
-    downloaded = download_stream(rtmp_info, download_path, mode=mode)
+    downloaded = download_stream(smil_url, download_path, stream_type)
     return downloaded
 
 def main(mode='replay'):
@@ -434,5 +456,4 @@ def main(mode='replay'):
     return 0
 
 if __name__ == '__main__':
-    main()
 
