@@ -174,9 +174,14 @@ def search_events(events, regex):
     filtered = []
     for pat in regex:
         found = [i for i in events
-                 if re.search(pat, i['xml'].xpath('string()'), re.I)]
+                 if re.search(pat, get_event_strings(i), re.I)]
         filtered.extend(found)
     return filtered
+
+def get_event_strings(event):
+    searchable = ['name', 'site', 'caption', 'league', 'summary']
+    event_text = ' '.join([event[s] for s in searchable if event[s]])
+    return event_text
 
 def prompt_events(events):
     #~ if not events:
