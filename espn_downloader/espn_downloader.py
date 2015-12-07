@@ -47,29 +47,25 @@ NETWORK_IDS = {'n360': 'espn3',
 
 def get_options():
     parser = argparse.ArgumentParser(prog='espn_downloader')
-    parser.add_argument('-m', '--mode', default='replay',
-                        choices=['replay', 'live'])
+    #parser.add_argument('-m', '--mode', default='replay',
+                        #choices=['replay', 'live'])
     parser.add_argument('-d', '--days', default='3', type=int)
-    parser.add_argument('-b', '--bitrate', choices=['max', 'min', 'prompt',
-                                                    '400k', '800k', '1200k',
-                                                    '2200k'],
-                        default='max')
+    #parser.add_argument('-b', '--bitrate', choices=['max', 'min', 'prompt',
+                                                    #'400k', '800k', '1200k',
+                                                    #'2200k'],
+                        #default='max')
     parser.add_argument('-l', '--list-sports', action='store_true')
     parser.add_argument('-s', '--search', action='append')
-    parser.add_argument('--search-sports', action='append')
-    parser.add_argument('--download-dir', default=None,
+    parser.add_argument('-o', '--output-directory', default=None,
                         help='Default: current directory')
-    parser.add_argument('--cache-dir', default='~/.config/iz_espn',
-                        help='Directory for storing/reading events cache.')
-    parser.add_argument('-r', '--force-refresh-minutes', type=int, default=60)
     options = parser.parse_args()
-    if options.download_dir is None:
-        options.download_dir = os.getcwd()
+    if options.output_directory is None:
+        options.output_directory = os.getcwd()
     else:
-        options.download_dir = os.path.expandvars(options.download_dir)
-        options.download_dir = os.path.expanduser(options.download_dir)
-    options.cache_dir = os.path.expandvars(options.cache_dir)
-    options.cache_dir = os.path.expanduser(options.cache_dir)
+        options.output_directory = os.path.expandvars(
+                                                options.output_directory)
+        options.output_directory = os.path.expanduser(
+                                                options.output_directory)
     return options
 
 OPTIONS = get_options()
@@ -329,7 +325,7 @@ def get_event(event, quality=None, mode='replay'):
         ext = 'ts'
     else:
         ext = 'mp4'
-    download_path = os.path.join(OPTIONS.download_dir, event['filename'])
+    download_path = os.path.join(OPTIONS.output_directory, event['filename'])
     download_path = '{}.{}'.format(download_path, ext)
     auth_url = get_auth_url(event)
     smil_url = get_smil_url(auth_url)
@@ -443,7 +439,7 @@ def main(mode='replay'):
     chosen = prompt_events(events)
     print('{1}\nEvent Info: {0}\n{1}\n'.format(chosen, '='*78), sep='\n')
     #~ quality = select_bitrate(OPTIONS.bitrate)
-    downloaded = get_event(chosen, quality=OPTIONS.bitrate)
+    downloaded = get_event(chosen)
     
     return 0
 
