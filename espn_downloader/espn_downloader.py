@@ -39,7 +39,7 @@ NETWORK_IDS = {'n360': 'espn3',
 #-----------------------------------------------------------------------------
 
 def get_options():
-    parser = argparse.ArgumentParser(prog='iz_espn')
+    parser = argparse.ArgumentParser(prog='espn_downloader')
     parser.add_argument('-d', '--days', default='3', type=int)
     parser.add_argument('-b', '--bitrate', choices=['max', 'min', 'prompt',
                                                     '400k', '800k', '1200k', 
@@ -131,7 +131,7 @@ def get_events(days=7, force_refresh_minutes=None, channels=['espn3'],
             new_url = get_feeds_url(start, [c])
         if new_url:
             print('Fetching new events from server...')
-            new_events = parse_feed(new_url)
+            #new_events = parse_feed(new_url)
             new_events = [n for n in parse_feed(new_url) if n['eventid']
                           not in [i['eventid'] for i in channel_events]]
             channel_events = new_events + channel_events
